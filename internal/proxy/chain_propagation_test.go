@@ -54,15 +54,15 @@ func buildThreeRouterChain(t *testing.T, providerURL string) *Proxy {
 // TestRouterChain_ErrorStatusPropagatedThroughChain verifies that ANY error
 // status produced by the provider behind router3 travels unchanged through
 // router3 → router2 → router1 to the client. Covers both non-retryable
-// statuses (plain passthrough) and retryable ones (400, 401, 402, 403, 429,
+// statuses (plain passthrough) and retryable ones (429,
 // 5xx) — with no alternative credentials at any hop, the original response
 // must be returned, never remapped to a different code.
 func TestRouterChain_ErrorStatusPropagatedThroughChain(t *testing.T) {
 	statuses := []int{
-		http.StatusBadRequest,            // 400 — retryable class
-		http.StatusUnauthorized,          // 401 — retryable class (auth)
-		http.StatusPaymentRequired,       // 402 — retryable class (payment)
-		http.StatusForbidden,             // 403 — retryable class (auth)
+		http.StatusBadRequest,            // 400 — non-retryable client error
+		http.StatusUnauthorized,          // 401 — non-retryable client/auth error
+		http.StatusPaymentRequired,       // 402 — non-retryable quota/payment error
+		http.StatusForbidden,             // 403 — non-retryable auth error
 		http.StatusNotFound,              // 404 — non-retryable passthrough
 		http.StatusRequestTimeout,        // 408 — non-retryable passthrough
 		http.StatusConflict,              // 409 — non-retryable passthrough

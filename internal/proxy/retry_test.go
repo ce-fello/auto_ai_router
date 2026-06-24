@@ -22,6 +22,13 @@ func TestShouldRetryWithFallback_RateLimitError(t *testing.T) {
 	assert.Equal(t, RetryReasonRateLimit, reason)
 }
 
+func TestShouldRetryWithFallback_RequestTimeout(t *testing.T) {
+	shouldRetry, reason := ShouldRetryWithFallback(http.StatusRequestTimeout, []byte("request timeout"))
+
+	assert.True(t, shouldRetry)
+	assert.Equal(t, RetryReasonNetErr, reason)
+}
+
 func TestShouldRetryWithFallback_ServerErrors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -32,6 +39,7 @@ func TestShouldRetryWithFallback_ServerErrors(t *testing.T) {
 		{"502 Bad Gateway", http.StatusBadGateway},
 		{"503 Service Unavailable", http.StatusServiceUnavailable},
 		{"504 Gateway Timeout", http.StatusGatewayTimeout},
+		{"524 Timeout", 524},
 	}
 
 	for _, tt := range tests {
@@ -44,12 +52,14 @@ func TestShouldRetryWithFallback_ServerErrors(t *testing.T) {
 	}
 }
 
-func TestShouldRetryWithFallback_AuthErrors(t *testing.T) {
+func TestShouldRetryWithFallback_ClientErrorsAreNotRetried(t *testing.T) {
 	tests := []struct {
 		name       string
 		statusCode int
 	}{
+		{"400 Bad Request", http.StatusBadRequest},
 		{"401 Unauthorized", http.StatusUnauthorized},
+		{"402 Payment Required", http.StatusPaymentRequired},
 		{"403 Forbidden", http.StatusForbidden},
 	}
 
@@ -57,17 +67,10 @@ func TestShouldRetryWithFallback_AuthErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			shouldRetry, reason := ShouldRetryWithFallback(tt.statusCode, []byte("unauthorized"))
 
-			assert.True(t, shouldRetry)
-			assert.Equal(t, RetryReasonAuthErr, reason)
+			assert.False(t, shouldRetry)
+			assert.Equal(t, RetryReason(""), reason)
 		})
 	}
-}
-
-func TestShouldRetryWithFallback_PaymentRequired(t *testing.T) {
-	shouldRetry, reason := ShouldRetryWithFallback(http.StatusPaymentRequired, []byte("quota exceeded"))
-
-	assert.True(t, shouldRetry)
-	assert.Equal(t, RetryReasonPaymentErr, reason)
 }
 
 func TestShouldRetryWithFallback_NonRetryableStatus(t *testing.T) {
@@ -88,14 +91,6 @@ func TestShouldRetryWithFallback_NonRetryableStatus(t *testing.T) {
 			assert.Equal(t, RetryReason(""), reason)
 		})
 	}
-}
-
-func TestShouldRetryWithFallback_BadRequest(t *testing.T) {
-	// 400 Bad Request is retried — a different credential may not produce the same error
-	shouldRetry, reason := ShouldRetryWithFallback(http.StatusBadRequest, []byte("bad request"))
-
-	assert.True(t, shouldRetry)
-	assert.Equal(t, RetryReasonServerErr, reason)
 }
 
 func TestShouldRetryWithFallback_ContentPolicyViolation(t *testing.T) {
@@ -131,6 +126,7 @@ func TestShouldRetryWithFallback_ModelNotFound(t *testing.T) {
 		respBody string
 	}{
 		{"model not found", "model not found"},
+		{"model_not_found code", `{"error":{"code":"model_not_found","message":"no available channel for group default and model missing"}}`},
 		{"Model Not Found uppercase", "Model Not Found"},
 		{"model does not exist", "model does not exist"},
 		{"Model Does Not Exist", "Model Does Not Exist"},
@@ -151,6 +147,74 @@ func TestShouldRetryWithFallback_ModelNotFound(t *testing.T) {
 	}
 }
 
+func TestShouldRetryWithFallback_InvalidRequest(t *testing.T) {
+	shouldRetry, reason := ShouldRetryWithFallback(
+		http.StatusInternalServerError,
+		[]byte(`{"error":{"code":"invalid_request","message":"bad payload"}}`),
+	)
+
+	assert.False(t, shouldRetry)
+	assert.Equal(t, RetryReason(""), reason)
+}
+
+func TestShouldRetryWithFallback_CometDocumentedClientErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   int
+		respBody string
+	}{
+		{
+			name:     "500 invalid_request missing messages",
+			status:   http.StatusInternalServerError,
+			respBody: `{"error":{"message":"field messages is required (request id: req_123)","type":"comet_api_error","param":"","code":"invalid_request"}}`,
+		},
+		{
+			name:     "503 model_not_found with routing internals",
+			status:   http.StatusServiceUnavailable,
+			respBody: `{"error":{"code":"model_not_found","message":"no available channel for group default and model definitely-not-real (distributor)","type":"comet_api_error"}}`,
+		},
+		{
+			name:     "500 missing required parameter",
+			status:   http.StatusInternalServerError,
+			respBody: `{"error":{"code":"missing_required_parameter","message":"Missing required parameter: messages"}}`,
+		},
+		{
+			name:     "500 invalid token",
+			status:   http.StatusInternalServerError,
+			respBody: `{"error":{"code":"","message":"invalid token (request id: req_123)","type":"comet_api_error"}}`,
+		},
+		{
+			name:     "503 blocked by WAF",
+			status:   http.StatusServiceUnavailable,
+			respBody: `{"error":{"message":"request access was blocked by WAF filtering","type":"comet_api_error"}}`,
+		},
+		{
+			name:     "500 invalid json shape",
+			status:   http.StatusInternalServerError,
+			respBody: `{"error":{"message":"request validation failed: invalid JSON shape"}}`,
+		},
+		{
+			name:     "500 wrong field type",
+			status:   http.StatusInternalServerError,
+			respBody: `{"error":{"message":"field messages has wrong type"}}`,
+		},
+		{
+			name:     "500 oversized payload",
+			status:   http.StatusInternalServerError,
+			respBody: `{"error":{"message":"request entity too large"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shouldRetry, reason := ShouldRetryWithFallback(tt.status, []byte(tt.respBody))
+
+			assert.False(t, shouldRetry)
+			assert.Equal(t, RetryReason(""), reason)
+		})
+	}
+}
+
 func TestShouldRetryWithFallback_RetryableInfrastructureError(t *testing.T) {
 	// Regular infrastructure errors should be retried
 	shouldRetry, reason := ShouldRetryWithFallback(
@@ -160,6 +224,30 @@ func TestShouldRetryWithFallback_RetryableInfrastructureError(t *testing.T) {
 
 	assert.True(t, shouldRetry)
 	assert.Equal(t, RetryReasonServerErr, reason)
+}
+
+func TestShouldRetryWithFallback_CometDocumentedPlatformErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		reason     RetryReason
+	}{
+		{"429 saturation", http.StatusTooManyRequests, "temporary saturation", RetryReasonRateLimit},
+		{"500 provider failure", http.StatusInternalServerError, "provider failed before completion", RetryReasonServerErr},
+		{"503 route unavailable", http.StatusServiceUnavailable, "route or provider service temporarily unavailable", RetryReasonServerErr},
+		{"504 timeout", http.StatusGatewayTimeout, "timeout between platform and provider", RetryReasonServerErr},
+		{"524 timeout", 524, "edge timeout between platform and provider", RetryReasonServerErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shouldRetry, reason := ShouldRetryWithFallback(tt.statusCode, []byte(tt.body))
+
+			assert.True(t, shouldRetry)
+			assert.Equal(t, tt.reason, reason)
+		})
+	}
 }
 
 func TestShouldRetryWithFallback_RateLimitWithContentPolicy(t *testing.T) {

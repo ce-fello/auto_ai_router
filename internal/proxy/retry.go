@@ -40,12 +40,8 @@ func ShouldRetryWithFallback(statusCode int, respBody []byte) (bool, RetryReason
 	// Determine if status code is retryable
 	var retryReason RetryReason
 	switch {
-	case statusCode == http.StatusBadRequest:
-		retryReason = RetryReasonServerErr
-	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
-		retryReason = RetryReasonAuthErr
-	case statusCode == http.StatusPaymentRequired:
-		retryReason = RetryReasonPaymentErr
+	case statusCode == http.StatusRequestTimeout:
+		retryReason = RetryReasonNetErr
 	case statusCode == http.StatusTooManyRequests:
 		retryReason = RetryReasonRateLimit
 	case statusCode >= 500 && statusCode < 600:
@@ -71,20 +67,68 @@ func isRetryableContent(respBody []byte) bool {
 	bodyLower := bytes.ToLower(respBody)
 
 	// Don't retry if content policy violation (provider-specific business logic error)
-	if bytes.Contains(bodyLower, []byte("content policy")) ||
-		bytes.Contains(bodyLower, []byte("content management policy")) ||
-		bytes.Contains(bodyLower, []byte("policy violation")) {
+	if containsAny(bodyLower,
+		"content policy",
+		"content management policy",
+		"policy violation",
+	) {
 		return false
 	}
 
 	// Don't retry if it's a model-specific error that won't be fixed by retrying
-	if bytes.Contains(bodyLower, []byte("model not found")) ||
-		bytes.Contains(bodyLower, []byte("model does not exist")) ||
-		bytes.Contains(bodyLower, []byte("unsupported model")) {
+	if containsAny(bodyLower,
+		"model not found",
+		"model_not_found",
+		"model does not exist",
+		"unsupported model",
+	) {
+		return false
+	}
+
+	// Don't retry malformed requests surfaced through provider-specific envelopes.
+	// Comet API can return HTTP 500/503 for request-shape errors; their docs call
+	// out invalid_request, missing required fields, invalid JSON/field types, auth
+	// failures, blocked requests, path mistakes, and oversized payloads as fixes to
+	// make before retrying the same request.
+	if containsAny(bodyLower,
+		"invalid_request",
+		"invalid_request_error",
+		"missing_required_parameter",
+		"missing required parameter",
+		"missing required field",
+		"field messages is required",
+		"field model is required",
+		"request validation failed",
+		"invalid json",
+		"invalid request",
+		"wrong type",
+		"invalid token",
+		"invalid api key",
+		"api key is missing",
+		"api key missing",
+		"missing api key",
+		"malformed api key",
+		"access was blocked",
+		"access blocked",
+		"not allowed to use",
+		"route is not allowed",
+		"waf",
+		"request entity too large",
+		"payload too large",
+	) {
 		return false
 	}
 
 	return true
+}
+
+func containsAny(body []byte, patterns ...string) bool {
+	for _, pattern := range patterns {
+		if bytes.Contains(body, []byte(pattern)) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetTried gets the set of tried credentials from context.
@@ -109,7 +153,7 @@ func SetTried(ctx context.Context, tried map[string]bool) context.Context {
 // - Prevents circular retries (proxy-a -> proxy-b -> proxy-a)
 // - Enforces MaxFallbackAttempts as an upper bound
 //
-// When a fallback returns a retryable error (429, 5xx), the next configured fallback
+// When a fallback proxy returns a retryable error (429, 5xx), the next configured fallback
 // is tried automatically, exhausting the full chain before writing the final response.
 func (p *Proxy) TryFallbackProxy(
 	w http.ResponseWriter,
@@ -135,7 +179,7 @@ func (p *Proxy) TryFallbackProxy(
 	var lastFallbackCred *config.CredentialConfig
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		fallbackCred, err := p.balancer.NextFallbackProxyForModel(modelID)
+		fallbackCred, err := p.balancer.NextFallbackProxyForModelExcluding(modelID, triedCreds)
 		if err != nil {
 			if attempt == 0 {
 				p.logger.DebugContext(r.Context(), "No fallback proxy available for retry",
@@ -228,7 +272,7 @@ func (p *Proxy) TryFallbackProxy(
 		)
 	}
 
-	// All fallbacks exhausted — write last response if we have one.
+	// All fallback proxies exhausted — write last response if we have one.
 	if lastProxyResp != nil && lastFallbackCred != nil {
 		return p.writeFallbackResponse(w, r, lastProxyResp, lastFallbackCred, modelID, originalCredName, logCtx, start)
 	}

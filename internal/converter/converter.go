@@ -341,9 +341,10 @@ func ExtractTokenUsage(body []byte) *TokenUsage {
 			PromptTokens        int `json:"prompt_tokens"`
 			CompletionTokens    int `json:"completion_tokens"`
 			PromptTokensDetails struct {
-				CachedTokens int `json:"cached_tokens,omitempty"`
-				AudioTokens  int `json:"audio_tokens,omitempty"`
-				TextTokens   int `json:"text_tokens,omitempty"`
+				CachedTokens        int `json:"cached_tokens,omitempty"`
+				CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+				AudioTokens         int `json:"audio_tokens,omitempty"`
+				TextTokens          int `json:"text_tokens,omitempty"`
 			} `json:"prompt_tokens_details,omitempty"`
 			CompletionTokensDetails struct {
 				AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
@@ -390,6 +391,7 @@ func ExtractTokenUsage(body []byte) *TokenUsage {
 	if cachedTokens == 0 {
 		cachedTokens = resp.Usage.InputTokensDetails.CachedTokens
 	}
+	cacheCreationTokens := resp.Usage.PromptTokensDetails.CacheCreationTokens
 	audioIn := resp.Usage.PromptTokensDetails.AudioTokens
 	if audioIn == 0 {
 		audioIn = resp.Usage.InputTokensDetails.AudioTokens
@@ -424,6 +426,7 @@ func ExtractTokenUsage(body []byte) *TokenUsage {
 		PromptTokens:             promptTokens,
 		CompletionTokens:         completionTokens,
 		CachedInputTokens:        cachedTokens,
+		CacheCreationTokens:      cacheCreationTokens,
 		AudioInputTokens:         audioIn,
 		ImageTokens:              resp.Usage.InputTokensDetails.ImageTokens,
 		AcceptedPredictionTokens: resp.Usage.CompletionTokensDetails.AcceptedPredictionTokens,
