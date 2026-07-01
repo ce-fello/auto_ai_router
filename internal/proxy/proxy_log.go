@@ -256,10 +256,6 @@ func (p *Proxy) logSpendToLiteLLMDB(logCtx *RequestLogContext) error {
 		customLLMProvider = string(config.ProviderTypeOpenAI)
 	}
 
-	if teamID == "" {
-		teamID = credName
-	}
-
 	return p.LiteLLMDB.LogSpend(&litellmdb.SpendLogEntry{
 		RequestID:         logCtx.RequestID,
 		StartTime:         logCtx.StartTime,
