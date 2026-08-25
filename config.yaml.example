@@ -130,6 +130,22 @@ models:
     rpm: 60
     tpm: -1
 
+  # Sosana.art chat models exposed through /v1/chat/completions. Only the
+  # `-compliant` aliases are routable: they stay on Google Gemini and reject
+  # tools / response_format / max_tokens, so the router keeps such requests away
+  # from this credential.
+  - name: "sosana/gemini-flash-compliant"
+    model: "gemini-flash-compliant"
+    credential: sosana_images
+    rpm: 100
+    tpm: 100000
+
+  - name: "sosana/gemini-pro-compliant"
+    model: "gemini-pro-compliant"
+    credential: sosana_images
+    rpm: 100
+    tpm: 100000
+
   # Comet API Claude aliases for public model names.
   - name: "anthropic/claude-haiku-4.5"
     model: "claude-haiku-4-5-20251001"

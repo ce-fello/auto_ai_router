@@ -226,6 +226,9 @@ func (p *Proxy) nextPrimaryAfterUnsupportedCredential(
 
 func unsupportedCredentialRequest(cred *config.CredentialConfig, body []byte, selectedModel string, path string, contentType string, realModelID string) (string, string) {
 	if cred != nil && cred.Type == config.ProviderTypeSosana {
+		if sosana.IsChatCompletionsPath(path) {
+			return sosana.UnsupportedChatRequest(body, realModelID), "Sosana"
+		}
 		if reason := sosana.UnsupportedModel(realModelID); reason != "" {
 			return reason, "Sosana"
 		}
@@ -946,7 +949,9 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if cred.Type == config.ProviderTypeSosana {
+	// Images run through Sosana's async task flow; Chat Completions are an
+	// OpenAI-compatible endpoint and take the normal direct-provider path below.
+	if cred.Type == config.ProviderTypeSosana && (isImageGeneration || isImageEdit) {
 		p.handleSosanaRequest(w, r, body, cred, modelID, realModelID, isImageGeneration, isImageEdit, logCtx, start)
 		return
 	}
