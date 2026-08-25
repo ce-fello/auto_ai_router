@@ -20,6 +20,7 @@ import (
 	"github.com/mixaill76/auto_ai_router/internal/converter/anthropic"
 	"github.com/mixaill76/auto_ai_router/internal/converter/converterutil"
 	openaiconv "github.com/mixaill76/auto_ai_router/internal/converter/openai"
+	"github.com/mixaill76/auto_ai_router/internal/converter/sosana"
 	"github.com/mixaill76/auto_ai_router/internal/converter/vertex"
 )
 
@@ -290,6 +291,14 @@ func (c *ProviderConverter) BuildURL(cred *config.CredentialConfig) string {
 		return vertex.BuildGeminiURL(cred, c.mode.ModelID, c.mode.IsStreaming)
 	case config.ProviderTypeAnthropic, config.ProviderTypeCometAPI, config.ProviderTypeProMan:
 		return converterutil.BuildVersionedURL(cred.BaseURL, "/v1/messages")
+	case config.ProviderTypeSosana:
+		// Chat Completions live under Sosana's own /api prefix, so the incoming
+		// /v1/... path can't simply be appended to the base URL. Image requests
+		// never reach the converter — they are handled by the async task flow.
+		if c.mode.IsImageGeneration || c.mode.IsImageEdit {
+			return ""
+		}
+		return sosana.ChatCompletionsURL(cred.BaseURL)
 	case config.ProviderTypeBedrock:
 		baseURL := strings.TrimSuffix(cred.BaseURL, "/")
 		if c.mode.IsStreaming {
@@ -313,7 +322,7 @@ func (c *ProviderConverter) RewrittenContentType() string {
 // Passthrough providers use the OpenAI wire format natively.
 func (c *ProviderConverter) IsPassthrough() bool {
 	switch c.providerType {
-	case config.ProviderTypeOpenAI, config.ProviderTypeProxy, config.ProviderTypeAIR:
+	case config.ProviderTypeOpenAI, config.ProviderTypeProxy, config.ProviderTypeAIR, config.ProviderTypeSosana:
 		return true
 	default:
 		return false

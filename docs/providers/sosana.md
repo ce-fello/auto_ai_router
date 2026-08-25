@@ -1,12 +1,19 @@
 # Sosana.art
 
-Sosana.art is supported as an image-only provider for the OpenAI-compatible
-Images API. The router accepts `/v1/images/generations` and `/v1/images/edits`,
+Sosana.art is supported for the OpenAI-compatible Images API and, for the
+`-compliant` Gemini chat models, for Chat Completions.
+
+For images the router accepts `/v1/images/generations` and `/v1/images/edits`,
 submits a Sosana Banana async task, polls it, and returns an OpenAI Images
 response with `data[].b64_json`.
 
-Chat Completions, Responses API, Embeddings, video, and slides are not routed to
-Sosana in this integration.
+For text the router forwards `/v1/chat/completions` to Sosana's own
+OpenAI-compatible endpoint (`/api/chat/completions`), streaming and
+non-streaming alike. Only `gemini-flash-compliant` and `gemini-pro-compliant`
+are routed there — see [Chat Completions](#chat-completions).
+
+Responses API, Embeddings, video, and slides are not routed to Sosana in this
+integration.
 
 ## Configuration
 
@@ -40,6 +47,68 @@ proxies.
 Sosana Banana tasks are asynchronous and can take longer than short chat
 completion requests. For production Sosana credentials, set the router
 `request_timeout` and HTTP `write_timeout` to at least `2m`.
+
+Chat models are configured the same way, against the same or a separate
+credential:
+
+```yaml
+models:
+  - name: "sosana/gemini-flash-compliant"
+    model: "gemini-flash-compliant"
+    credential: sosana_images
+    rpm: 100
+    tpm: 100000
+
+  - name: "sosana/gemini-pro-compliant"
+    model: "gemini-pro-compliant"
+    credential: sosana_images
+    rpm: 100
+    tpm: 100000
+```
+
+One credential serves both APIs — the router picks the flow from the request
+path, so a chat model and an image model may share `credential: sosana_images`.
+
+## Chat Completions
+
+Sosana serves two chat models, and this integration routes only those:
+
+| Model                    | Upstream                                  |
+| ------------------------ | ----------------------------------------- |
+| `gemini-flash-compliant` | Google Gemini Flash, via Sosana's own accounts |
+| `gemini-pro-compliant`   | Google Gemini Pro, via Sosana's own accounts   |
+
+They are the compliant variants of Sosana's `gemini-flash` / `gemini-pro`
+aliases: a request is served by Google Gemini itself and is never handed to a
+third-party provider. That guarantee is also the limitation — everything Sosana
+would need a fallback provider for is refused upstream with a `400`:
+
+- `tools`, `tool_choice`, `functions` / `function_call` — no tool calling.
+- `response_format` — no structured output.
+- `max_tokens` / `max_completion_tokens` — no output cap.
+- more than 100 000 characters of message text (attachments are not counted).
+- `n` must be `1`.
+
+The router screens those requests off the Sosana credential before sending
+anything, the same way it does for incompatible image requests: another primary
+credential for the same model is tried, then the fallback proxy cascade, and
+only if nothing can serve it does the router return a local `400`. Sosana never
+sees a request it would reject.
+
+Other Chat Completions parameters (`temperature`, `top_p`, `stop`, `seed`,
+`stream`, `stream_options`, …) are forwarded unchanged. Note that the compliant
+models do not honour the sampling parameters — send them if your client always
+does, but do not expect `temperature` to change the output.
+
+Streaming works normally: Sosana returns OpenAI Chat Completions SSE, which the
+router forwards as-is. Token usage is read from the response `usage` object, and
+from the streamed usage chunk when the client asks for it via
+`stream_options.include_usage`.
+
+Chat spend is calculated from the normal per-token price entries
+(`input_cost_per_token` / `output_cost_per_token`) for the model, from the
+internal price registry or the LiteLLM model table — there is no image-style
+per-request price for text.
 
 ## Behavior
 
